@@ -1,0 +1,165 @@
+{
+  "app_name": "VIT Hostel Connect",
+  "personality": "1 iOS-Native Clean",
+  "personality_one_liner": "A highly functional, official-feeling institutional app that pairs clean corporate navy aesthetics with structural rigor and transparent statuses.",
+  "color": {
+    "surface": "#F8FAFC",
+    "onSurface": "#0F172A",
+    "surfaceSecondary": "#FFFFFF",
+    "onSurfaceSecondary": "#1E293B",
+    "surfaceTertiary": "#F1F5F9",
+    "onSurfaceTertiary": "#334155",
+    "surfaceInverse": "#0F172A",
+    "onSurfaceInverse": "#F8FAFC",
+    "brand": "#0B2447",
+    "brandPrimary": "#0B2447",
+    "onBrandPrimary": "#FFFFFF",
+    "brandSecondary": "#19376D",
+    "onBrandSecondary": "#FFFFFF",
+    "brandTertiary": "#E0E7FF",
+    "onBrandTertiary": "#0B2447",
+    "success": "#059669",
+    "onSuccess": "#FFFFFF",
+    "warning": "#D97706",
+    "onWarning": "#FFFFFF",
+    "error": "#DC2626",
+    "onError": "#FFFFFF",
+    "info": "#2563EB",
+    "onInfo": "#FFFFFF",
+    "border": "#E2E8F0",
+    "borderStrong": "#CBD5E1",
+    "divider": "#F1F5F9"
+  },
+  "typography": {
+    "displayFontFamily": "Plus Jakarta Sans",
+    "textFontFamily": "Plus Jakarta Sans",
+    "scale": {
+      "sm": 12,
+      "base": 14,
+      "lg": 16,
+      "xl": 20,
+      "2xl": 24
+    }
+  },
+  "spacing": {
+    "rule": "Generous spacing for an uncluttered corporate feel. Cards use at least md/lg margins. Avoid dense, edge-to-edge grids unless specifically requested.",
+    "xs": 4,
+    "sm": 8,
+    "md": 12,
+    "lg": 16,
+    "xl": 24,
+    "2xl": 32,
+    "3xl": 48
+  },
+  "radius_tokens": {
+    "sm": 6,
+    "md": 12,
+    "lg": 20,
+    "pill": 999
+  },
+  "shadow_tier": "1",
+  "navigation": "bottom_tabs",
+  "icon_set": "Phosphor",
+  "glassmorphism": {
+    "enabled": "true",
+    "do's": [
+      "Bottom tab bar",
+      "Sticky headers over scrolling content",
+      "Bottom-sheet headers"
+    ],
+    "dont's": [
+      "Form fields",
+      "Body text regions",
+      "Cards in dense lists"
+    ]
+  },
+  "platform_libraries": {
+    "glass": {
+      "ios": "expo-glass-effect",
+      "android": "expo-blur",
+      "low_end_android_fallback": "solid surfaceSecondary"
+    },
+    "image": "expo-image",
+    "blur": "expo-blur",
+    "bottom_sheet": "@gorhom/bottom-sheet",
+    "animation": "react-native-reanimated",
+    "gesture": "react-native-gesture-handler"
+  },
+  "screens": [
+    {
+      "name": "Role Selection & Login",
+      "purpose": "Secure authentication gate with segmented role selection.",
+      "states": {
+        "loading": "Spinner over disabled CTA",
+        "empty": "N/A",
+        "error": "Inline text below input or bottom sheet for auth failures"
+      },
+      "layout": "Top third: University Logo + Welcome text. Middle: Segmented control (Student, Warden, Admin) followed by Email/RegNo & Password inputs. Bottom: Sticky primary CTA. Uses glass header if scrollable."
+    },
+    {
+      "name": "Student Dashboard",
+      "purpose": "Central hub for a student to view their room info, roommates, and recent requests.",
+      "states": {
+        "loading": "Skeleton loaders for hero card and recent requests list",
+        "empty": "N/A",
+        "error": "Retry state replacing the failed section"
+      },
+      "layout": "Hero Section: 'surfaceSecondary' card overlaid with dark gradient scrim and 'modern dorm room' image showing block/room details. Quick Actions Grid: 2-column rounded cards for Cleaning, Maintenance, Leaves. List Section: 'Recent Requests' showing pill-shaped status badges."
+    },
+    {
+      "name": "Warden Dashboard",
+      "purpose": "Operational command center for wardens to manage block metrics and pending tasks.",
+      "states": {
+        "loading": "Skeleton loaders for stats grid",
+        "empty": "Illustration for 'No pending tasks tonight'",
+        "error": "Retry button for fetching block data"
+      },
+      "layout": "Top: Summary metrics (Occupancy %, Pending Complaints). Quick Actions: 'Mark Attendance', 'Approve Leaves'. Bottom: Scrollable list of actionable threads/complaints needing attention."
+    },
+    {
+      "name": "Maintenance/Cleaning Request Flow",
+      "purpose": "A streamlined form to submit requests with priority levels and photo attachments.",
+      "states": {
+        "loading": "Submitting overlay",
+        "empty": "N/A",
+        "error": "Error toast or inline validation messages"
+      },
+      "layout": "Single column form. Category selector (chips). Text area. Photo upload area (dashed border). Sticky CTA 'Submit Request' at the bottom within KeyboardAvoidingView."
+    },
+    {
+      "name": "Attendance Roll Call (Warden)",
+      "purpose": "Fast, bulk-actionable list to mark student attendance daily.",
+      "states": {
+        "loading": "Skeleton list",
+        "empty": "Illustration 'All students marked for today'",
+        "error": "Retry state for fetching student list"
+      },
+      "layout": "Top: Date picker and search bar. List of students with initials avatars. Each row has a segmented control (Present/Absent/Leave). Bottom: Sticky 'Mark All Present' floating glass button."
+    }
+  ],
+  "images": {
+    "vit_logo": {
+      "url": "https://images.pexels.com/photos/33927819/pexels-photo-33927819.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+      "alt": "VIT university logo fallback"
+    },
+    "dorm_hero": {
+      "url": "https://images.unsplash.com/photo-1555854877-bab0e564b8d5?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDk1NzZ8MHwxfHNlYXJjaHwxfHxjbGVhbiUyMG1vZGVybiUyMGRvcm0lMjByb29tfGVufDB8fHx8MTc4NzQxODQxNHww&ixlib=rb-4.1.0&q=85",
+      "dark": "https://images.unsplash.com/photo-1555854877-bab0e564b8d5?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDk1NzZ8MHwxfHNlYXJjaHwxfHxjbGVhbiUyMG1vZGVybiUyMGRvcm0lMjByb29tfGVufDB8fHx8MTc4NzQxODQxNHww&ixlib=rb-4.1.0&q=85",
+      "alt": "Modern dorm room"
+    },
+    "hostel_building": {
+      "url": "https://images.unsplash.com/photo-1619218070141-bcfeb8b93074?crop=entropy&cs=srgb&fm=jpg&ixid=M3wNjY2NzF8MHwxfHNlYXJjaHwxfHxtb2Rlcm4lMjBob3N0ZWwlMjBidWlsZGluZyUyMGZhY2FkZXxlbnwwfHx8fDE3ODc0MTg0MTR8MA&ixlib=rb-4.1.0&q=85",
+      "dark": "https://images.unsplash.com/photo-1619218070141-bcfeb8b93074?crop=entropy&cs=srgb&fm=jpg&ixid=M3wNjY2NzF8MHwxfHNlYXJjaHwxfHxtb2Rlcm4lMjBob3N0ZWwlMjBidWlsZGluZyUyMGZhY2FkZXxlbnwwfHx8fDE3ODc0MTg0MTR8MA&ixlib=rb-4.1.0&q=85",
+      "alt": "Modern hostel building facade"
+    }
+  },
+  "instructions_to_main_agent": [
+    "CRITICAL: The user explicitly requested a 'Navy/deep-blue' corporate banking-style UI. This overrides the default NO BLUE rule. Use the navy brand colors specified in the palette.",
+    "Implement '1 iOS-Native Clean' personality. Keep typography highly legible using Plus Jakarta Sans. Spacing must be generous (lg/xl margins).",
+    "Use Phosphor icons. Ensure consistent weights across the app (fill for active tabs, regular for outlines).",
+    "Status badges (Pending, In Progress, Resolved) must use consistent color-coding (warning, info, success tokens) and be shaped as pills (radius: pill). Do not use chips for statuses; chips are for filtering.",
+    "For the Attendance Roll Call screen, utilize a list layout with a sticky bottom action (e.g., 'Mark All Present') inside a fixed glass container.",
+    "Always apply a gradient scrim over the 'dorm_hero' image before overlaying any text, ensuring WCAG contrast compliance.",
+    "Add 'haptics' on success states (e.g., form submissions, marking attendance)."
+  ]
+}
