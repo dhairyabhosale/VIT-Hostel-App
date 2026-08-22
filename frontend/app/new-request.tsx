@@ -1,14 +1,19 @@
 import { Ionicons } from "@expo/vector-icons";
+import { Image } from "expo-image";
+import * as ImagePicker from "expo-image-picker";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import React, { useEffect, useState } from "react";
-import { View, Text, StyleSheet, Pressable } from "react-native";
+import { View, Text, StyleSheet, Pressable, Platform, Linking } from "react-native";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { api } from "@/src/api/client";
+import { api, TOKEN_KEY } from "@/src/api/client";
 import { useToast } from "@/src/components/Toast";
 import { Btn, Chip, Input } from "@/src/components/UI";
 import { C, R, S, CATEGORY_ICONS } from "@/src/theme";
+import { storage } from "@/src/utils/storage";
+
+const BASE = process.env.EXPO_PUBLIC_BACKEND_URL;
 
 const TIME_SLOTS = ["8:00 AM – 10:00 AM", "10:00 AM – 12:00 PM", "12:00 PM – 2:00 PM", "2:00 PM – 4:00 PM", "4:00 PM – 6:00 PM", "6:00 PM – 8:00 PM", "8:00 PM – 10:00 PM"];
 const CATEGORIES = Object.keys(CATEGORY_ICONS);
@@ -35,6 +40,8 @@ export default function NewRequest() {
   const [category, setCategory] = useState("electrical");
   const [description, setDescription] = useState("");
   const [urgency, setUrgency] = useState("medium");
+  const [photos, setPhotos] = useState<{ uri: string; name: string; type: string }[]>([]);
+  const [photoPermBlocked, setPhotoPermBlocked] = useState(false);
 
   // change
   const [changeType, setChangeType] = useState("room_change");
@@ -51,6 +58,55 @@ export default function NewRequest() {
     }
   }, [type]);
 
+  const pickPhoto = async () => {
+    if (photos.length >= 3) return toast.show("Maximum 3 photos per complaint", "info");
+    if (Platform.OS !== "web") {
+      const perm = await ImagePicker.getMediaLibraryPermissionsAsync();
+      if (!perm.granted) {
+        if (perm.canAskAgain) {
+          const req = await ImagePicker.requestMediaLibraryPermissionsAsync();
+          if (!req.granted) {
+            toast.show("Photo access is needed to attach pictures of the issue", "error");
+            if (!req.canAskAgain) setPhotoPermBlocked(true);
+            return;
+          }
+        } else {
+          setPhotoPermBlocked(true);
+          toast.show("Photo access is blocked. Enable it in Settings to attach photos.", "error");
+          return;
+        }
+      }
+    }
+    const res = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ["images"], quality: 0.6 });
+    if (!res.canceled && res.assets?.length) {
+      const a = res.assets[0];
+      setPhotos((p) => [...p, { uri: a.uri, name: a.fileName || `photo-${Date.now()}.jpg`, type: a.mimeType || "image/jpeg" }]);
+    }
+  };
+
+  const uploadPhotos = async (): Promise<string[]> => {
+    const token = await storage.secureGet(TOKEN_KEY, null);
+    const ids: string[] = [];
+    for (const p of photos) {
+      const form = new FormData();
+      if (Platform.OS === "web") {
+        const blob = await (await fetch(p.uri)).blob();
+        form.append("file", blob, p.name);
+      } else {
+        form.append("file", { uri: p.uri, name: p.name, type: p.type } as any);
+      }
+      const res = await fetch(`${BASE}/api/uploads/complaint-photo`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+        body: form,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(typeof data?.detail === "string" ? data.detail : "Photo upload failed");
+      ids.push(data.file_id);
+    }
+    return ids;
+  };
+
   const submit = async () => {
     setBusy(true);
     try {
@@ -59,7 +115,8 @@ export default function NewRequest() {
         toast.show("Cleaning request submitted", "success");
       } else if (type === "complaint") {
         if (!description.trim()) { toast.show("Describe the issue", "error"); setBusy(false); return; }
-        await api("/student/complaints", { method: "POST", body: { category, description: description.trim(), urgency } });
+        const photoIds = photos.length ? await uploadPhotos() : [];
+        await api("/student/complaints", { method: "POST", body: { category, description: description.trim(), urgency, photo_attachments: photoIds } });
         toast.show("Complaint submitted", "success");
       } else {
         if (!requestedValue.trim() || !reason.trim()) { toast.show("Fill in the requested value and reason", "error"); setBusy(false); return; }
@@ -142,6 +199,31 @@ export default function NewRequest() {
             </View>
             <Input testID="complaint-description-input" label="Description" placeholder="Describe the issue briefly…" value={description} onChangeText={setDescription} multiline />
             <View style={{ gap: S.sm }}>
+              <Text style={styles.label}>Photos (optional, up to 3)</Text>
+              <View style={{ flexDirection: "row", flexWrap: "wrap", gap: S.sm }}>
+                {photos.map((p, i) => (
+                  <View key={i} style={styles.photoThumbWrap}>
+                    <Image source={{ uri: p.uri }} style={styles.photoThumb} contentFit="cover" />
+                    <Pressable testID={`remove-photo-${i}`} onPress={() => setPhotos((prev) => prev.filter((_, j) => j !== i))} style={styles.photoRemove}>
+                      <Ionicons name="close" size={12} color="#FFF" />
+                    </Pressable>
+                  </View>
+                ))}
+                {photos.length < 3 && (
+                  <Pressable testID="add-photo-button" onPress={pickPhoto} style={styles.photoAdd}>
+                    <Ionicons name="camera-outline" size={22} color={C.brand} />
+                    <Text style={{ fontSize: 10, color: C.brand, fontWeight: "700" }}>Add photo</Text>
+                  </Pressable>
+                )}
+              </View>
+              {photoPermBlocked && (
+                <Pressable testID="open-settings-button" onPress={() => Linking.openSettings()} style={styles.settingsBtn}>
+                  <Ionicons name="settings-outline" size={14} color={C.error} />
+                  <Text style={{ fontSize: 12, color: C.error, fontWeight: "700" }}>Photo access blocked — Open Settings</Text>
+                </Pressable>
+              )}
+            </View>
+            <View style={{ gap: S.sm }}>
               <Text style={styles.label}>Urgency</Text>
               <View style={{ flexDirection: "row", gap: S.sm }}>
                 {URGENCIES.map((u) => (
@@ -216,6 +298,17 @@ const styles = StyleSheet.create({
     flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 12, height: 40,
     borderRadius: R.pill, borderWidth: 1, borderColor: C.border, backgroundColor: C.card, flexShrink: 0,
   },
+  photoThumbWrap: { position: "relative" },
+  photoThumb: { width: 72, height: 72, borderRadius: R.md, backgroundColor: C.surfaceTertiary },
+  photoRemove: {
+    position: "absolute", top: -6, right: -6, width: 20, height: 20, borderRadius: 10,
+    backgroundColor: C.error, alignItems: "center", justifyContent: "center",
+  },
+  photoAdd: {
+    width: 72, height: 72, borderRadius: R.md, borderWidth: 1.5, borderColor: C.borderStrong,
+    borderStyle: "dashed", alignItems: "center", justifyContent: "center", gap: 2, backgroundColor: C.card,
+  },
+  settingsBtn: { flexDirection: "row", alignItems: "center", gap: 6, paddingVertical: 6 },
   stickyBar: {
     position: "absolute", left: 0, right: 0, bottom: 0, padding: S.lg,
     backgroundColor: C.card, borderTopWidth: 1, borderTopColor: C.border,

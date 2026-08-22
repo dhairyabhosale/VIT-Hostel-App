@@ -10,7 +10,10 @@
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.emergent.vithostelconnect.ideill"
+      "bundleIdentifier": "com.emergent.vithostelconnect.ideill",
+      "infoPlist": {
+        "NSPhotoLibraryUsageDescription": "Attach photos of room issues to maintenance complaints"
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -18,7 +21,8 @@
         "backgroundColor": "#000000"
       },
       "edgeToEdgeEnabled": true,
-      "package": "com.emergent.vithostelconnect.ideill"
+      "package": "com.emergent.vithostelconnect.ideill",
+      "permissions": ["android.permission.READ_MEDIA_IMAGES"]
     },
     "web": {
       "bundler": "metro",

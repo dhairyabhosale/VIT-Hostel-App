@@ -10,15 +10,20 @@ from zoneinfo import ZoneInfo
 
 import jwt
 from dotenv import load_dotenv
-from fastapi import FastAPI, APIRouter, Depends, HTTPException
+from fastapi import FastAPI, APIRouter, Depends, HTTPException, UploadFile, File, Request
+from fastapi.responses import Response
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from motor.motor_asyncio import AsyncIOMotorClient
 from pwdlib import PasswordHash
 from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
 from starlette.middleware.cors import CORSMiddleware
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
+
+from emailer import send_email  # noqa: E402
+from object_storage import init_storage, put_object, get_object  # noqa: E402
 
 mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
@@ -166,6 +171,7 @@ class ComplaintIn(BaseModel):
     category: str
     description: str
     urgency: str = "medium"
+    photo_attachments: List[str] = []
 
 
 class RateIn(BaseModel):
@@ -300,9 +306,28 @@ async def student_initiate(data: InitiateIn):
         "otp_hash": pwd.hash(otp),
         "otp_expires_at": iso(now() + timedelta(minutes=10)),
     }})
-    logger.info(f"MOCK OTP for {reg} ({user['email']}): {otp}")
-    # Mock email: OTP returned in response for testing (replace with real email provider later)
-    return {"message": f"OTP sent to {user['email']}", "email": user["email"], "mock_otp": otp}
+    logger.info(f"Activation OTP generated for {reg} ({user['email']})")
+    otp_html = (
+        '<table role="presentation" width="100%"><tr><td style="padding:24px;font-family:Arial,sans-serif">'
+        f'<h2 style="color:#0B2447;margin:0 0 12px">VIT Hostel Connect</h2>'
+        f'<p>Hi {user["name"]},</p>'
+        f'<p>Your one-time password (OTP) to activate your hostel account ({reg}) is:</p>'
+        f'<p style="font-size:28px;font-weight:bold;letter-spacing:6px;color:#0B2447;margin:16px 0">{otp}</p>'
+        '<p>This OTP expires in 10 minutes. If you did not request this, you can ignore this email.</p>'
+        '<p style="font-size:12px;color:#888">Sent by VIT Hostel Connect. We will never ask you to share this code back with anyone.</p>'
+        '</td></tr></table>'
+    )
+    try:
+        await send_email(to=user["email"], subject="Your VIT Hostel Connect activation OTP", html=otp_html)
+        return {"message": f"OTP sent to {user['email']}", "email": user["email"]}
+    except Exception as e:
+        logger.error(f"OTP email delivery failed for {reg}: {e}")
+        # Fallback so the student is never locked out if email delivery fails
+        return {
+            "message": f"Email delivery failed — demo OTP shown below (registered email: {user['email']})",
+            "email": user["email"],
+            "mock_otp": otp,
+        }
 
 
 @api.post("/auth/student/activate")
@@ -544,13 +569,19 @@ async def create_complaint(data: ComplaintIn, user=Depends(student_only)):
     if not alloc:
         raise HTTPException(400, "No active room allocation")
     room = await db.rooms.find_one({"id": alloc["room_id"]}, {"_id": 0})
+    # only attach photos this student actually uploaded
+    photos = []
+    for fid in data.photo_attachments[:3]:
+        f = await db.files.find_one({"id": fid, "owner_id": user["id"]}, {"_id": 0})
+        if f:
+            photos.append(fid)
     t = iso(now())
     doc = {
         "id": uid(), "student_id": user["id"], "student_name": user["name"],
         "registration_number": user.get("registration_number"),
         "room_id": alloc["room_id"], "room_number": room["room_number"] if room else "",
         "block_id": alloc["block_id"], "category": data.category,
-        "description": data.description, "photo_attachments": [],
+        "description": data.description, "photo_attachments": photos,
         "urgency": data.urgency, "status": "submitted", "assigned_to": "",
         "created_at": t, "resolution_note": "", "student_feedback_rating": None,
         "status_history": [{"status": "submitted", "timestamp": t, "note": "Complaint submitted"}],
@@ -818,6 +849,26 @@ async def mark_attendance(data: AttendanceIn, user=Depends(warden_or_admin)):
         if e.status == "absent":
             await notify(e.student_id, "Marked absent", f"You were marked ABSENT for hostel attendance on {data.date}. Contact your warden if this is incorrect.", "attendance")
             await db.attendance.update_one({"student_id": e.student_id, "date": data.date}, {"$set": {"notification_sent": True}})
+            # Parent alert email (if a parent contact is on record)
+            sdoc = await db.users.find_one({"id": e.student_id}, {"_id": 0})
+            already_absent = existing and existing["status"] == "absent"
+            if sdoc and sdoc.get("parent_email") and not already_absent:
+                alert_html = (
+                    '<table role="presentation" width="100%"><tr><td style="padding:24px;font-family:Arial,sans-serif">'
+                    f'<h2 style="color:#0B2447;margin:0 0 12px">VIT Hostel Connect</h2>'
+                    f'<p>Dear Parent/Guardian,</p>'
+                    f'<p>This is to inform you that <strong>{sdoc["name"]}</strong> '
+                    f'({sdoc.get("registration_number", "")}) was marked <strong>ABSENT</strong> during the hostel '
+                    f'night attendance on <strong>{data.date}</strong>.</p>'
+                    '<p>If this is unexpected, please contact your ward or the hostel warden office.</p>'
+                    '<p style="font-size:12px;color:#888">Automated alert sent by VIT Hostel Connect hostel administration.</p>'
+                    '</td></tr></table>'
+                )
+                try:
+                    await send_email(to=sdoc["parent_email"], subject=f"Hostel attendance alert — {sdoc['name']} marked absent ({data.date})", html=alert_html)
+                    logger.info(f"Parent absence alert emailed for {sdoc.get('registration_number')}")
+                except Exception as ex:
+                    logger.error(f"Parent alert email failed for {sdoc.get('registration_number')}: {ex}")
         marked += 1
     return {"marked": marked, "date": data.date}
 
@@ -1031,15 +1082,20 @@ async def roster_import(data: RosterImportIn, user=Depends(admin_only)):
         if i == 0 and ("registration" in line.lower() or "name" in line.lower()):
             continue
         if len(parts) < 4:
-            errors.append(f"Line {i + 1}: expected 4 fields (reg no, name, email, phone)")
+            errors.append(f"Line {i + 1}: expected at least 4 fields (reg no, name, email, phone, parent email optional)")
             continue
         reg, name, email, phone = parts[0].upper(), parts[1], parts[2].lower(), parts[3]
-        if await db.users.find_one({"registration_number": reg}):
+        parent_email = parts[4].lower() if len(parts) > 4 and parts[4] else None
+        existing = await db.users.find_one({"registration_number": reg}, {"_id": 0})
+        if existing:
+            if parent_email and not existing.get("parent_email"):
+                await db.users.update_one({"id": existing["id"]}, {"$set": {"parent_email": parent_email}})
             skipped += 1
             continue
         await db.users.insert_one({
             "id": uid(), "role": "student", "name": name, "registration_number": reg,
-            "email": email, "phone": phone, "password_hash": None, "activated": False,
+            "email": email, "phone": phone, "parent_email": parent_email,
+            "password_hash": None, "activated": False,
             "active_status": True, "share_phone": False, "created_at": iso(now()),
         })
         created += 1
@@ -1189,6 +1245,71 @@ async def admin_analytics(user=Depends(admin_only)):
     }
 
 
+# ---------- FILE UPLOADS (complaint photos via Emergent Object Storage) ----------
+
+ALLOWED_IMAGE_EXT = ("jpg", "jpeg", "png", "webp", "heic")
+
+
+@api.post("/uploads/complaint-photo")
+async def upload_complaint_photo(file: UploadFile = File(...), user=Depends(student_only)):
+    if not (file.content_type or "").startswith("image/"):
+        raise HTTPException(400, "Only image files are allowed")
+    data = await file.read()
+    if len(data) > 5 * 1024 * 1024:
+        raise HTTPException(400, "Image must be under 5 MB")
+    ext = (file.filename or "photo.jpg").rsplit(".", 1)[-1].lower()
+    if ext not in ALLOWED_IMAGE_EXT:
+        ext = "jpg"
+    path = f"vit-hostel-connect/uploads/{user['id']}/{uid()}.{ext}"
+    try:
+        result = await run_in_threadpool(put_object, path, data, file.content_type or "image/jpeg")
+    except Exception as e:
+        status = getattr(getattr(e, "response", None), "status_code", None)
+        logger.error(f"Photo upload failed ({status}): {e}")
+        if status == 402:
+            raise HTTPException(402, "Storage credits exhausted. Photo uploads are temporarily unavailable.")
+        raise HTTPException(502, "Photo upload failed. Please try again.")
+    doc = {
+        "id": uid(), "owner_id": user["id"], "storage_path": result["path"],
+        "content_type": file.content_type or "image/jpeg", "name": file.filename or "",
+        "created_at": iso(now()),
+    }
+    await db.files.insert_one(doc)
+    return {"file_id": doc["id"]}
+
+
+@api.get("/files/{file_id}")
+async def serve_file(file_id: str, request: Request, token: Optional[str] = None):
+    # Auth via Bearer header (native) or short-lived JWT in query (web <img> cannot send headers)
+    raw = token
+    if not raw:
+        auth = request.headers.get("Authorization", "")
+        if auth.startswith("Bearer "):
+            raw = auth[7:]
+    unauthorized = HTTPException(401, "Unauthorized")
+    if not raw:
+        raise unauthorized
+    try:
+        payload = jwt.decode(raw, JWT_SECRET, algorithms=[ALGO])
+    except jwt.InvalidTokenError:
+        raise unauthorized
+    viewer = await db.users.find_one({"id": payload["sub"]}, {"_id": 0})
+    if not viewer or not viewer.get("active_status"):
+        raise unauthorized
+    f = await db.files.find_one({"id": file_id}, {"_id": 0})
+    if not f:
+        raise HTTPException(404, "File not found")
+    if viewer["role"] == "student" and f["owner_id"] != viewer["id"]:
+        raise HTTPException(403, "Access denied")
+    try:
+        content, ctype = await run_in_threadpool(get_object, f["storage_path"])
+    except Exception as e:
+        logger.error(f"File fetch failed: {e}")
+        raise HTTPException(502, "Could not fetch file")
+    return Response(content=content, media_type=f.get("content_type") or ctype,
+                    headers={"Cache-Control": "private, max-age=3600"})
+
+
 @api.get("/")
 async def root():
     return {"message": "VIT Hostel Connect API"}
@@ -1203,6 +1324,15 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.on_event("startup")
+async def startup_init():
+    try:
+        await run_in_threadpool(init_storage)
+        logger.info("Object storage initialized")
+    except Exception as e:
+        logger.error(f"Object storage init failed (photo uploads may not work): {e}")
 
 
 @app.on_event("shutdown")
