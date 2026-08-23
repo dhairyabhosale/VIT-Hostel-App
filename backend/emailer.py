@@ -1,28 +1,39 @@
-"""Emergent-managed Resend email sending. See integration playbook guardrails G1-G6."""
-import os
-import re
+"""Provider-neutral transactional email sender.
+
+Uses Brevo's transactional email API so the backend is independent of Emergent.
+Required environment variables:
+  BREVO_API_KEY
+  EMAIL_FROM_ADDRESS
+  EMAIL_FROM_NAME
+Optional:
+  EMAIL_REPLY_TO
+"""
 import ipaddress
 import logging
-import httpx
+import os
+import re
 from html.parser import HTMLParser
 from urllib.parse import urlparse
+
+import httpx
 from dotenv import load_dotenv
-from fastapi import HTTPException
 
 load_dotenv()
 logger = logging.getLogger(__name__)
 
-# Emergent managed email proxy. This is a CONSTANT — never read it from os.environ.
-EMAIL_BASE_URL = "https://integrations.emergentagent.com"
-EMAIL_KEY = os.environ["EMERGENT_EMAIL_KEY"]
-EMAIL_FROM_NAME = os.environ["EMAIL_FROM_NAME"]  # this app's OWN brand (G1)
-EMAIL_REPLY_TO = os.environ.get("EMAIL_REPLY_TO")
+BREVO_API_URL = "https://api.brevo.com/v3/smtp/email"
+BREVO_API_KEY = os.environ.get("BREVO_API_KEY", "").strip()
+EMAIL_FROM_ADDRESS = os.environ.get("EMAIL_FROM_ADDRESS", "").strip()
+EMAIL_FROM_NAME = os.environ.get("EMAIL_FROM_NAME", "VIT Hostel Connect").strip()
+EMAIL_REPLY_TO = os.environ.get("EMAIL_REPLY_TO", "").strip() or None
 
 _SHORTENERS = ("bit.ly", "tinyurl.com", "t.co", "is.gd", "cutt.ly", "goo.gl", "rebrand.ly")
-_CRED_ASK = ("reply with your password", "reply with the code", "send your password", "cvv",
-             "send us your password", "enter your password below", "confirm your card number",
-             "your full card number", "seed phrase", "recovery phrase", "verify your card",
-             "social security number", "confirm your bank details")
+_CRED_ASK = (
+    "reply with your password", "reply with the code", "send your password", "cvv",
+    "send us your password", "enter your password below", "confirm your card number",
+    "your full card number", "seed phrase", "recovery phrase", "verify your card",
+    "social security number", "confirm your bank details",
+)
 _HOSTISH = re.compile(r"\b(?:https?://)?((?:[a-z0-9-]+\.)+[a-z]{2,})", re.I)
 
 
@@ -68,49 +79,63 @@ def _assert_safe_email(subject: str, html: str) -> None:
     scan = _EmailScan()
     scan.feed(html)
     if scan.tags & {"form", "input", "textarea", "select"}:
-        raise ValueError("No forms or input fields in email (G2)")
+        raise ValueError("No forms or input fields in email")
     body = f"{subject}\n{html}".lower()
-    for p in _CRED_ASK:
-        if p in body:
-            raise ValueError(f"Email asks the recipient for credentials: {p!r} (G2)")
+    for phrase in _CRED_ASK:
+        if phrase in body:
+            raise ValueError(f"Email asks the recipient for credentials: {phrase!r}")
     for url in scan.urls:
         low = url.strip().lower()
         if low.startswith(("mailto:", "tel:", "cid:", "#")):
             continue
         if not low.startswith("https://"):
-            raise ValueError(f"Email links/assets must be absolute https: {url!r} (G3)")
+            raise ValueError(f"Email links/assets must be absolute https: {url!r}")
         host = urlparse(low).hostname or ""
         if not _host_ok(host) or urlparse(low).username is not None:
-            raise ValueError(f"Shortened, numeric-host or credential-bearing URL: {url!r} (G3)")
+            raise ValueError(f"Unsafe URL in email: {url!r}")
     for href, text in scan.anchors:
         real = urlparse(href.strip().lower()).hostname or ""
         if not real:
             continue
-        for m in _HOSTISH.finditer(text):
-            if not _same_site(m.group(1).lower(), real):
-                raise ValueError(f"Anchor text {m.group(1)!r} != real link host {real!r} (G3)")
+        for match in _HOSTISH.finditer(text):
+            if not _same_site(match.group(1).lower(), real):
+                raise ValueError(f"Anchor text does not match link host: {match.group(1)!r}")
 
 
 async def send_email(*, to: str, subject: str, html: str, reply_to: str | None = None) -> str | None:
-    """Send an email via the Emergent proxy. `html` must come from a server-side template (G4)."""
+    """Send a transactional email through Brevo's public HTTPS API."""
     _assert_safe_email(subject, html)
-    payload = {"to": [to], "subject": subject, "html": html, "from_name": EMAIL_FROM_NAME}
-    if reply_to or EMAIL_REPLY_TO:
-        payload["contact_email"] = reply_to or EMAIL_REPLY_TO
+    if not BREVO_API_KEY:
+        raise RuntimeError("BREVO_API_KEY is not configured")
+    if not EMAIL_FROM_ADDRESS:
+        raise RuntimeError("EMAIL_FROM_ADDRESS is not configured")
+
+    payload = {
+        "sender": {"name": EMAIL_FROM_NAME, "email": EMAIL_FROM_ADDRESS},
+        "to": [{"email": to}],
+        "subject": subject,
+        "htmlContent": html,
+    }
+    reply = reply_to or EMAIL_REPLY_TO
+    if reply:
+        payload["replyTo"] = {"email": reply}
+
     try:
         async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.post(
-                f"{EMAIL_BASE_URL}/api/v1/email/send",
-                headers={"X-Email-Key": EMAIL_KEY},
+            response = await client.post(
+                BREVO_API_URL,
+                headers={
+                    "accept": "application/json",
+                    "api-key": BREVO_API_KEY,
+                    "content-type": "application/json",
+                },
                 json=payload,
             )
-        resp.raise_for_status()
-        return resp.json().get("id")
-    except httpx.HTTPStatusError as e:
-        logger.error(f"Email send failed: {e.response.status_code} {e.response.text}")
-        raise HTTPException(status_code=502, detail="Failed to send email")
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Email send error: {str(e)}")
-        raise HTTPException(status_code=500, detail="Failed to send email")
+        response.raise_for_status()
+        return response.json().get("messageId")
+    except httpx.HTTPStatusError as exc:
+        logger.error("Brevo email send failed: %s %s", exc.response.status_code, exc.response.text)
+        raise RuntimeError("Transactional email delivery failed") from exc
+    except Exception as exc:
+        logger.error("Email send error: %s", exc)
+        raise RuntimeError("Transactional email delivery failed") from exc
