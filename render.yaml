@@ -8,6 +8,8 @@ services:
     healthCheckPath: /api/
     plan: free
     envVars:
+      - key: PYTHON_VERSION
+        value: "3.13.5"
       - key: MONGO_URL
         sync: false
       - key: DB_NAME
