@@ -1,56 +1,74 @@
-"""Emergent Managed Object Storage helpers (sync `requests` — call via run_in_threadpool)."""
-import os
+"""Cloudinary-backed object storage helpers.
+
+Keeps the same put_object/get_object interface used by the API while removing
+Emergent's object-storage dependency.
+
+Required environment variables:
+  CLOUDINARY_CLOUD_NAME
+  CLOUDINARY_API_KEY
+  CLOUDINARY_API_SECRET
+"""
+import io
 import logging
-import requests
+import os
+
+import cloudinary
+import cloudinary.uploader
+import cloudinary.api
 from dotenv import load_dotenv
 
 load_dotenv()
 logger = logging.getLogger(__name__)
 
-STORAGE_BASE = (os.environ.get("INTEGRATION_PROXY_URL") or "").strip() or "https://integrations.emergentagent.com"
-STORAGE_URL = STORAGE_BASE.rstrip("/") + "/objstore/api/v1/storage"
-EMERGENT_KEY = os.environ.get("EMERGENT_LLM_KEY")
 APP_NAME = "vit-hostel-connect"
-storage_key = None
 
 
 def init_storage():
-    """Call ONCE at startup. Idempotent — returns a reusable storage_key."""
-    global storage_key
-    if storage_key:
-        return storage_key
-    resp = requests.post(f"{STORAGE_URL}/init", json={"emergent_key": EMERGENT_KEY}, timeout=30)
-    resp.raise_for_status()
-    storage_key = resp.json()["storage_key"]
-    return storage_key
-
-
-def _reset_key():
-    global storage_key
-    storage_key = None
+    """Validate Cloudinary configuration. Safe to call repeatedly."""
+    cloudinary.config(
+        cloud_name=os.environ.get("CLOUDINARY_CLOUD_NAME"),
+        api_key=os.environ.get("CLOUDINARY_API_KEY"),
+        api_secret=os.environ.get("CLOUDINARY_API_SECRET"),
+        secure=True,
+    )
+    if not all([
+        os.environ.get("CLOUDINARY_CLOUD_NAME"),
+        os.environ.get("CLOUDINARY_API_KEY"),
+        os.environ.get("CLOUDINARY_API_SECRET"),
+    ]):
+        raise RuntimeError("Cloudinary storage is not configured")
+    return True
 
 
 def put_object(path: str, data: bytes, content_type: str) -> dict:
-    """Upload (overwrites silently if path exists). Returns {"path","size","etag"}."""
-    key = init_storage()
-    resp = requests.put(f"{STORAGE_URL}/objects/{path}",
-                        headers={"X-Storage-Key": key, "Content-Type": content_type}, data=data, timeout=120)
-    if resp.status_code == 503:  # stale key — reset and retry once
-        _reset_key()
-        key = init_storage()
-        resp = requests.put(f"{STORAGE_URL}/objects/{path}",
-                            headers={"X-Storage-Key": key, "Content-Type": content_type}, data=data, timeout=120)
-    resp.raise_for_status()
-    return resp.json()
+    """Upload bytes to Cloudinary and return a storage descriptor."""
+    init_storage()
+    public_id = path.rsplit(".", 1)[0]
+    result = cloudinary.uploader.upload(
+        io.BytesIO(data),
+        public_id=public_id,
+        resource_type="image",
+        overwrite=True,
+        invalidate=True,
+    )
+    return {
+        "path": result["public_id"],
+        "size": len(data),
+        "etag": result.get("etag"),
+        "secure_url": result.get("secure_url"),
+        "resource_type": result.get("resource_type", "image"),
+        "format": result.get("format"),
+    }
 
 
 def get_object(path: str):
-    """Download. Returns (content_bytes, content_type)."""
-    key = init_storage()
-    resp = requests.get(f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": key}, timeout=60)
-    if resp.status_code == 503:
-        _reset_key()
-        key = init_storage()
-        resp = requests.get(f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": key}, timeout=60)
-    resp.raise_for_status()
-    return resp.content, resp.headers.get("Content-Type", "application/octet-stream")
+    """Download an image from Cloudinary by public ID."""
+    init_storage()
+    # Cloudinary's authenticated download endpoint returns the original bytes.
+    result = cloudinary.utils.cloudinary_url(path, secure=True, resource_type="image")
+    url = result[0]
+    import requests
+    response = requests.get(url, timeout=60)
+    response.raise_for_status()
+    content_type = response.headers.get("Content-Type", "image/jpeg")
+    return response.content, content_type
