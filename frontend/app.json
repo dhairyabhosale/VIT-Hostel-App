@@ -22,7 +22,9 @@
       },
       "edgeToEdgeEnabled": true,
       "package": "com.emergent.vithostelconnect.ideill",
-      "permissions": ["android.permission.READ_MEDIA_IMAGES"]
+      "permissions": [
+        "android.permission.READ_MEDIA_IMAGES"
+      ]
     },
     "web": {
       "bundler": "metro",
@@ -43,6 +45,12 @@
     ],
     "experiments": {
       "typedRoutes": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "0105369b-37a2-4db0-bb7c-28b85e1d38c1"
+      }
     }
   }
 }
